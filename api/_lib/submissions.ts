@@ -56,18 +56,43 @@ export const VALID_WORKFLOW_STATUSES = new Set([
 const FORBIDDEN_CREDENTIAL_KEYS = ['password', 'pass', 'pwd', 'secret', 'loginpassword'];
 
 export function isSupabaseConfigured(): boolean {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const url = process.env.SUPABASE_URL?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) return false;
+  if (
+    url.includes('YOUR_PROJECT_REF') ||
+    key.includes('YOUR_SUPABASE_SERVICE_ROLE_KEY')
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function getSupabaseClient(): SupabaseClient {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.SUPABASE_URL?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key) {
     throw new Error(
       'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables.',
     );
   }
-  return createClient(url, key, {
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(
+      'Invalid SUPABASE_URL format. Use your Project URL from Supabase Settings -> API (https://<project-ref>.supabase.co).',
+    );
+  }
+
+  if (parsed.pathname && parsed.pathname !== '/') {
+    throw new Error(
+      'SUPABASE_URL should be the base Project URL (https://<project-ref>.supabase.co) without a dashboard or sub-path.',
+    );
+  }
+
+  return createClient(parsed.origin, key, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -161,6 +186,73 @@ export function parseSubmissionPayload(body: Record<string, unknown>) {
     return { error: 'Please enter a valid work email address.' } as const;
   }
 
+  if (contactPhone.replace(/\D/g, '').length < 6) {
+    return { error: 'Please enter a valid phone or WhatsApp number.' } as const;
+  }
+
+  const facebookStatus = normalizeChannelStatus(body.facebookStatus);
+  const facebookAccountName = cleanStr(body.facebookAccountName, 140);
+  const facebookPageUrl = cleanStr(body.facebookPageUrl, 240);
+
+  const instagramStatus = normalizeChannelStatus(body.instagramStatus);
+  const instagramHandle = cleanStr(body.instagramHandle, 120);
+  const instagramCategory = cleanStr(body.instagramCategory, 100);
+
+  const tiktokStatus = normalizeChannelStatus(body.tiktokStatus);
+  const tiktokAccountName = cleanStr(body.tiktokAccountName, 140);
+  const tiktokHandle = cleanStr(body.tiktokHandle, 120);
+
+  const linkedinStatus = normalizeChannelStatus(body.linkedinStatus);
+  const linkedinAccountName = cleanStr(body.linkedinAccountName, 140);
+  const linkedinPageUrl = cleanStr(body.linkedinPageUrl, 240);
+
+  if (
+    facebookStatus === 'not_needed' &&
+    instagramStatus === 'not_needed' &&
+    tiktokStatus === 'not_needed' &&
+    linkedinStatus === 'not_needed'
+  ) {
+    return {
+      error: 'Please keep at least one social media platform selected for onboarding.',
+    } as const;
+  }
+
+  if (facebookStatus !== 'not_needed') {
+    if (!facebookAccountName) {
+      return { error: 'Facebook Account / Page Name is required.' } as const;
+    }
+    if (facebookStatus === 'has_account' && !facebookPageUrl) {
+      return { error: 'Facebook Page URL is required for existing accounts.' } as const;
+    }
+  }
+
+  if (instagramStatus !== 'not_needed') {
+    if (!instagramHandle) {
+      return { error: 'Instagram @Handle is required.' } as const;
+    }
+    if (!instagramCategory) {
+      return { error: 'Instagram Business Category is required.' } as const;
+    }
+  }
+
+  if (tiktokStatus !== 'not_needed') {
+    if (!tiktokAccountName) {
+      return { error: 'TikTok Account Name is required.' } as const;
+    }
+    if (!tiktokHandle) {
+      return { error: 'TikTok @Handle is required.' } as const;
+    }
+  }
+
+  if (linkedinStatus !== 'not_needed') {
+    if (!linkedinAccountName) {
+      return { error: 'LinkedIn Account / Page Name is required.' } as const;
+    }
+    if (linkedinStatus === 'has_account' && !linkedinPageUrl) {
+      return { error: 'LinkedIn Company Page URL is required for existing accounts.' } as const;
+    }
+  }
+
   return {
     data: {
       business_name: businessName,
@@ -171,20 +263,20 @@ export function parseSubmissionPayload(body: Record<string, unknown>) {
       industry,
       service_package: servicePackage,
       monthly_ad_budget: cleanStr(body.monthlyAdBudget, 80) || 'Not set yet',
-      facebook_status: normalizeChannelStatus(body.facebookStatus),
-      facebook_account_name: cleanStr(body.facebookAccountName, 140),
-      facebook_page_url: cleanStr(body.facebookPageUrl, 240),
+      facebook_status: facebookStatus,
+      facebook_account_name: facebookAccountName,
+      facebook_page_url: facebookStatus === 'create_new' ? '' : facebookPageUrl,
       meta_business_id: cleanStr(body.metaBusinessId, 60),
-      instagram_status: normalizeChannelStatus(body.instagramStatus),
-      instagram_handle: cleanStr(body.instagramHandle, 120),
-      instagram_category: cleanStr(body.instagramCategory, 100),
-      tiktok_status: normalizeChannelStatus(body.tiktokStatus),
-      tiktok_account_name: cleanStr(body.tiktokAccountName, 140),
-      tiktok_handle: cleanStr(body.tiktokHandle, 120),
+      instagram_status: instagramStatus,
+      instagram_handle: instagramHandle,
+      instagram_category: instagramCategory,
+      tiktok_status: tiktokStatus,
+      tiktok_account_name: tiktokAccountName,
+      tiktok_handle: tiktokHandle,
       tiktok_business_center_id: cleanStr(body.tiktokBusinessCenterId, 60),
-      linkedin_status: normalizeChannelStatus(body.linkedinStatus),
-      linkedin_account_name: cleanStr(body.linkedinAccountName, 140),
-      linkedin_page_url: cleanStr(body.linkedinPageUrl, 240),
+      linkedin_status: linkedinStatus,
+      linkedin_account_name: linkedinAccountName,
+      linkedin_page_url: linkedinStatus === 'create_new' ? '' : linkedinPageUrl,
       linkedin_campaign_id: cleanStr(body.linkedinCampaignId, 60),
       notes: cleanStr(body.notes, 1000),
       onboarding_status: 'Intake Submitted',

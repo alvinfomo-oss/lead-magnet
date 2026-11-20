@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   CheckCircle2,
   ShieldCheck,
@@ -52,11 +52,156 @@ const CHANNEL_STATUS_OPTIONS: { value: PlatformChannelStatus; label: string }[] 
   { value: 'not_needed', label: 'Not Needed' },
 ];
 
+type ValidatedFieldKey =
+  | 'businessName'
+  | 'contactName'
+  | 'contactEmail'
+  | 'contactPhone'
+  | 'industry'
+  | 'websiteUrl'
+  | 'servicePackage'
+  | 'facebookAccountName'
+  | 'facebookPageUrl'
+  | 'instagramHandle'
+  | 'instagramCategory'
+  | 'tiktokAccountName'
+  | 'tiktokHandle'
+  | 'linkedinAccountName'
+  | 'linkedinPageUrl'
+  | 'platforms';
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateForm(form: ClientOnboardingPayload): {
+  fieldErrors: Partial<Record<ValidatedFieldKey, string>>;
+  missingLabels: string[];
+} {
+  const fieldErrors: Partial<Record<ValidatedFieldKey, string>> = {};
+  const missingLabels: string[] = [];
+
+  if (!form.businessName.trim()) {
+    fieldErrors.businessName = 'Business / Brand Name is required.';
+    missingLabels.push('Business / Brand Name');
+  }
+  if (!form.contactName.trim()) {
+    fieldErrors.contactName = 'Primary Contact Name is required.';
+    missingLabels.push('Primary Contact Name');
+  }
+  if (!form.contactEmail.trim()) {
+    fieldErrors.contactEmail = 'Work Email is required.';
+    missingLabels.push('Work Email');
+  } else if (!EMAIL_REGEX.test(form.contactEmail.trim())) {
+    fieldErrors.contactEmail = 'Enter a valid work email address.';
+    missingLabels.push('Valid Work Email');
+  }
+  if (!form.contactPhone.trim()) {
+    fieldErrors.contactPhone = 'Phone / WhatsApp Number is required.';
+    missingLabels.push('Phone / WhatsApp Number');
+  } else if (form.contactPhone.replace(/\D/g, '').length < 6) {
+    fieldErrors.contactPhone = 'Enter a valid phone or WhatsApp number (at least 6 digits).';
+    missingLabels.push('Valid Phone Number');
+  }
+  if (!form.industry.trim()) {
+    fieldErrors.industry = 'Industry / Sector is required.';
+    missingLabels.push('Industry / Sector');
+  }
+  if (!form.servicePackage.trim()) {
+    fieldErrors.servicePackage = 'Requested Agency Service is required.';
+    missingLabels.push('Requested Agency Service');
+  }
+  if (
+    form.websiteUrl.trim() &&
+    !/^https?:\/\/.+\..+/i.test(form.websiteUrl.trim())
+  ) {
+    fieldErrors.websiteUrl = 'Website URL must start with https:// or http://';
+    missingLabels.push('Valid Website URL');
+  }
+
+  const allNotNeeded =
+    form.facebookStatus === 'not_needed' &&
+    form.instagramStatus === 'not_needed' &&
+    form.tiktokStatus === 'not_needed' &&
+    form.linkedinStatus === 'not_needed';
+
+  if (allNotNeeded) {
+    fieldErrors.platforms =
+      'Select at least one platform (Already Have Account or Need New Page Created).';
+    missingLabels.push('At least one Social Platform');
+  }
+
+  if (form.facebookStatus !== 'not_needed') {
+    if (!form.facebookAccountName.trim()) {
+      const label =
+        form.facebookStatus === 'create_new'
+          ? 'Desired Facebook Page Name'
+          : 'Facebook Account / Page Name';
+      fieldErrors.facebookAccountName = `${label} is required.`;
+      missingLabels.push(label);
+    }
+    if (form.facebookStatus === 'has_account' && !form.facebookPageUrl.trim()) {
+      fieldErrors.facebookPageUrl = 'Facebook Page URL is required for existing accounts.';
+      missingLabels.push('Facebook Page URL');
+    }
+  }
+
+  if (form.instagramStatus !== 'not_needed') {
+    if (!form.instagramHandle.trim()) {
+      const label =
+        form.instagramStatus === 'create_new'
+          ? 'Preferred Instagram Handle'
+          : 'Instagram @Handle';
+      fieldErrors.instagramHandle = `${label} is required.`;
+      missingLabels.push(label);
+    }
+    if (!form.instagramCategory.trim()) {
+      fieldErrors.instagramCategory = 'Instagram Business Category is required.';
+      missingLabels.push('Instagram Business Category');
+    }
+  }
+
+  if (form.tiktokStatus !== 'not_needed') {
+    if (!form.tiktokAccountName.trim()) {
+      const label =
+        form.tiktokStatus === 'create_new'
+          ? 'Desired TikTok Account Name'
+          : 'TikTok Account Name';
+      fieldErrors.tiktokAccountName = `${label} is required.`;
+      missingLabels.push(label);
+    }
+    if (!form.tiktokHandle.trim()) {
+      fieldErrors.tiktokHandle = 'TikTok @Handle is required.';
+      missingLabels.push('TikTok @Handle');
+    }
+  }
+
+  if (form.linkedinStatus !== 'not_needed') {
+    if (!form.linkedinAccountName.trim()) {
+      const label =
+        form.linkedinStatus === 'create_new'
+          ? 'Desired LinkedIn Page Name'
+          : 'LinkedIn Account / Page Name';
+      fieldErrors.linkedinAccountName = `${label} is required.`;
+      missingLabels.push(label);
+    }
+    if (form.linkedinStatus === 'has_account' && !form.linkedinPageUrl.trim()) {
+      fieldErrors.linkedinPageUrl = 'LinkedIn Company Page URL is required for existing accounts.';
+      missingLabels.push('LinkedIn Company Page URL');
+    }
+  }
+
+  return { fieldErrors, missingLabels };
+}
+
 export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormProps) {
   const [form, setForm] = useState<ClientOnboardingPayload>(INITIAL_FORM);
+  const [touched, setTouched] = useState<Partial<Record<ValidatedFieldKey, boolean>>>({});
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submittedRecord, setSubmittedRecord] = useState<ClientOnboardingRecord | null>(null);
+
+  const validation = useMemo(() => validateForm(form), [form]);
+  const isFormComplete = validation.missingLabels.length === 0;
 
   function updateField<K extends keyof ClientOnboardingPayload>(
     key: K,
@@ -66,24 +211,30 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
     if (errorMessage) setErrorMessage(null);
   }
 
+  function markTouched(key: ValidatedFieldKey) {
+    setTouched((prev) => ({ ...prev, [key]: true }));
+  }
+
+  function getFieldError(key: ValidatedFieldKey): string | undefined {
+    if (!attemptedSubmit && !touched[key]) return undefined;
+    return validation.fieldErrors[key];
+  }
+
+  function inputBorderClass(key: ValidatedFieldKey): string {
+    return getFieldError(key)
+      ? 'border-red-500 focus:border-red-600 focus:ring-red-500/15'
+      : 'border-slate-300 focus:border-blue-800 focus:ring-blue-800/15';
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setAttemptedSubmit(true);
     setErrorMessage(null);
 
-    if (
-      !form.businessName.trim() ||
-      !form.contactName.trim() ||
-      !form.contactEmail.trim() ||
-      !form.contactPhone.trim() ||
-      !form.industry.trim()
-    ) {
-      setErrorMessage('Please fill in all required business and contact fields.');
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(form.contactEmail.trim())) {
-      setErrorMessage('Please enter a valid work email address.');
+    if (!isFormComplete) {
+      setErrorMessage(
+        `Please complete all required (*) fields before submitting: ${validation.missingLabels.join(', ')}.`,
+      );
       return;
     }
 
@@ -113,6 +264,8 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
 
   function handleResetForNew() {
     setForm(INITIAL_FORM);
+    setTouched({});
+    setAttemptedSubmit(false);
     setSubmittedRecord(null);
     setErrorMessage(null);
   }
@@ -283,7 +436,6 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
     <form
       onSubmit={handleSubmit}
       className="bg-white border border-slate-200 rounded-xl p-6 md:p-10 space-y-10"
-      noValidate
     >
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-200">
         <div>
@@ -317,7 +469,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
           <h4 className="text-base font-semibold text-slate-900">
             01. Business & Contact Information
           </h4>
-          <span className="text-xs text-slate-500">Required fields marked *</span>
+          <span className="text-xs text-slate-500">All fields marked * are required</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -329,11 +481,17 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               id="businessName"
               type="text"
               required
+              aria-required="true"
+              aria-invalid={Boolean(getFieldError('businessName'))}
               value={form.businessName}
               onChange={(e) => updateField('businessName', e.target.value)}
+              onBlur={() => markTouched('businessName')}
               placeholder="e.g. Horizon Coffee Roasters"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('businessName')}`}
             />
+            {getFieldError('businessName') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('businessName')}</p>
+            )}
           </div>
 
           <div>
@@ -344,11 +502,17 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               id="contactName"
               type="text"
               required
+              aria-required="true"
+              aria-invalid={Boolean(getFieldError('contactName'))}
               value={form.contactName}
               onChange={(e) => updateField('contactName', e.target.value)}
+              onBlur={() => markTouched('contactName')}
               placeholder="e.g. Claire Mbarga"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('contactName')}`}
             />
+            {getFieldError('contactName') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('contactName')}</p>
+            )}
           </div>
 
           <div>
@@ -359,11 +523,17 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               id="contactEmail"
               type="email"
               required
+              aria-required="true"
+              aria-invalid={Boolean(getFieldError('contactEmail'))}
               value={form.contactEmail}
               onChange={(e) => updateField('contactEmail', e.target.value)}
+              onBlur={() => markTouched('contactEmail')}
               placeholder="name@company.com"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('contactEmail')}`}
             />
+            {getFieldError('contactEmail') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('contactEmail')}</p>
+            )}
           </div>
 
           <div>
@@ -374,11 +544,17 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               id="contactPhone"
               type="tel"
               required
+              aria-required="true"
+              aria-invalid={Boolean(getFieldError('contactPhone'))}
               value={form.contactPhone}
               onChange={(e) => updateField('contactPhone', e.target.value)}
+              onBlur={() => markTouched('contactPhone')}
               placeholder="+237 6XX XXX XXX"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('contactPhone')}`}
             />
+            {getFieldError('contactPhone') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('contactPhone')}</p>
+            )}
           </div>
 
           <div>
@@ -389,25 +565,36 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               id="industry"
               type="text"
               required
+              aria-required="true"
+              aria-invalid={Boolean(getFieldError('industry'))}
               value={form.industry}
               onChange={(e) => updateField('industry', e.target.value)}
+              onBlur={() => markTouched('industry')}
               placeholder="e.g. E-commerce, Real Estate, Hospitality"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('industry')}`}
             />
+            {getFieldError('industry') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('industry')}</p>
+            )}
           </div>
 
           <div>
             <label htmlFor="websiteUrl" className="block text-sm font-medium text-slate-800 mb-1.5">
-              Website URL
+              Website URL (Optional)
             </label>
             <input
               id="websiteUrl"
               type="url"
+              aria-invalid={Boolean(getFieldError('websiteUrl'))}
               value={form.websiteUrl}
               onChange={(e) => updateField('websiteUrl', e.target.value)}
+              onBlur={() => markTouched('websiteUrl')}
               placeholder="https://yourcompany.com"
-              className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
+              className={`w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('websiteUrl')}`}
             />
+            {getFieldError('websiteUrl') && (
+              <p className="mt-1 text-xs text-red-700">{getFieldError('websiteUrl')}</p>
+            )}
           </div>
 
           <div>
@@ -419,6 +606,8 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
             </label>
             <select
               id="servicePackage"
+              required
+              aria-required="true"
               value={form.servicePackage}
               onChange={(e) => updateField('servicePackage', e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 focus:ring-2 focus:ring-blue-800/15"
@@ -436,7 +625,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
               htmlFor="monthlyAdBudget"
               className="block text-sm font-medium text-slate-800 mb-1.5"
             >
-              Planned Monthly Ad Budget
+              Planned Monthly Ad Budget (Optional)
             </label>
             <select
               id="monthlyAdBudget"
@@ -461,10 +650,15 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
             02. Social Media Accounts & Business IDs
           </h4>
           <p className="text-xs text-slate-500 mt-1">
-            Specify existing public page names, handles, or Business IDs — or mark channels where
-            Netpub should create a new business page for you.
+            Required (*) fields apply to every platform unless marked Not Needed.
           </p>
         </div>
+
+        {validation.fieldErrors.platforms && (
+          <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-xs text-red-800">
+            {validation.fieldErrors.platforms}
+          </div>
+        )}
 
         {/* Facebook */}
         <div className="space-y-4 pb-6 border-b border-slate-100">
@@ -501,17 +695,26 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
                   {form.facebookStatus === 'create_new'
-                    ? 'Desired Facebook Page Name'
-                    : 'Facebook Account / Page Name'}
+                    ? 'Desired Facebook Page Name *'
+                    : 'Facebook Account / Page Name *'}
                 </label>
                 <input
                   id="facebookAccountName"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('facebookAccountName'))}
                   value={form.facebookAccountName}
                   onChange={(e) => updateField('facebookAccountName', e.target.value)}
+                  onBlur={() => markTouched('facebookAccountName')}
                   placeholder="e.g. Horizon Coffee Official"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('facebookAccountName')}`}
                 />
+                {getFieldError('facebookAccountName') && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {getFieldError('facebookAccountName')}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -519,17 +722,30 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="facebookPageUrl"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Facebook Page URL
+                  {form.facebookStatus === 'has_account'
+                    ? 'Facebook Page URL *'
+                    : 'Facebook Page URL'}
                 </label>
                 <input
                   id="facebookPageUrl"
                   type="text"
+                  required={form.facebookStatus === 'has_account'}
+                  aria-required={form.facebookStatus === 'has_account'}
+                  aria-invalid={Boolean(getFieldError('facebookPageUrl'))}
                   value={form.facebookPageUrl}
                   onChange={(e) => updateField('facebookPageUrl', e.target.value)}
-                  placeholder="https://facebook.com/yourpage"
+                  onBlur={() => markTouched('facebookPageUrl')}
+                  placeholder={
+                    form.facebookStatus === 'create_new'
+                      ? 'Not required for new page'
+                      : 'https://facebook.com/yourpage'
+                  }
                   disabled={form.facebookStatus === 'create_new'}
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 disabled:bg-slate-50 disabled:text-slate-400"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-400 ${inputBorderClass('facebookPageUrl')}`}
                 />
+                {getFieldError('facebookPageUrl') && (
+                  <p className="mt-1 text-xs text-red-700">{getFieldError('facebookPageUrl')}</p>
+                )}
               </div>
 
               <div>
@@ -537,7 +753,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="metaBusinessId"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Meta Business Portfolio ID
+                  Meta Business Portfolio ID (Optional)
                 </label>
                 <input
                   id="metaBusinessId"
@@ -587,17 +803,24 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
                   {form.instagramStatus === 'create_new'
-                    ? 'Preferred Instagram Handle'
-                    : 'Instagram @Handle'}
+                    ? 'Preferred Instagram Handle *'
+                    : 'Instagram @Handle *'}
                 </label>
                 <input
                   id="instagramHandle"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('instagramHandle'))}
                   value={form.instagramHandle}
                   onChange={(e) => updateField('instagramHandle', e.target.value)}
+                  onBlur={() => markTouched('instagramHandle')}
                   placeholder="e.g. @horizoncoffee"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('instagramHandle')}`}
                 />
+                {getFieldError('instagramHandle') && (
+                  <p className="mt-1 text-xs text-red-700">{getFieldError('instagramHandle')}</p>
+                )}
               </div>
 
               <div>
@@ -605,16 +828,25 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="instagramCategory"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Instagram Business Category
+                  Instagram Business Category *
                 </label>
                 <input
                   id="instagramCategory"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('instagramCategory'))}
                   value={form.instagramCategory}
                   onChange={(e) => updateField('instagramCategory', e.target.value)}
+                  onBlur={() => markTouched('instagramCategory')}
                   placeholder="e.g. Cafe & Specialty Goods"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('instagramCategory')}`}
                 />
+                {getFieldError('instagramCategory') && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {getFieldError('instagramCategory')}
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -655,17 +887,26 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
                   {form.tiktokStatus === 'create_new'
-                    ? 'Desired TikTok Account Name'
-                    : 'TikTok Account Name'}
+                    ? 'Desired TikTok Account Name *'
+                    : 'TikTok Account Name *'}
                 </label>
                 <input
                   id="tiktokAccountName"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('tiktokAccountName'))}
                   value={form.tiktokAccountName}
                   onChange={(e) => updateField('tiktokAccountName', e.target.value)}
+                  onBlur={() => markTouched('tiktokAccountName')}
                   placeholder="e.g. Horizon Coffee"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('tiktokAccountName')}`}
                 />
+                {getFieldError('tiktokAccountName') && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {getFieldError('tiktokAccountName')}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -673,16 +914,25 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="tiktokHandle"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  TikTok @Handle
+                  {form.tiktokStatus === 'create_new'
+                    ? 'Preferred TikTok @Handle *'
+                    : 'TikTok @Handle *'}
                 </label>
                 <input
                   id="tiktokHandle"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('tiktokHandle'))}
                   value={form.tiktokHandle}
                   onChange={(e) => updateField('tiktokHandle', e.target.value)}
+                  onBlur={() => markTouched('tiktokHandle')}
                   placeholder="e.g. @horizoncoffeecm"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('tiktokHandle')}`}
                 />
+                {getFieldError('tiktokHandle') && (
+                  <p className="mt-1 text-xs text-red-700">{getFieldError('tiktokHandle')}</p>
+                )}
               </div>
 
               <div>
@@ -690,7 +940,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="tiktokBusinessCenterId"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  TikTok Business Center ID
+                  TikTok Business Center ID (Optional)
                 </label>
                 <input
                   id="tiktokBusinessCenterId"
@@ -740,17 +990,26 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
                   {form.linkedinStatus === 'create_new'
-                    ? 'Desired LinkedIn Page Name'
-                    : 'LinkedIn Account / Page Name'}
+                    ? 'Desired LinkedIn Page Name *'
+                    : 'LinkedIn Account / Page Name *'}
                 </label>
                 <input
                   id="linkedinAccountName"
                   type="text"
+                  required
+                  aria-required="true"
+                  aria-invalid={Boolean(getFieldError('linkedinAccountName'))}
                   value={form.linkedinAccountName}
                   onChange={(e) => updateField('linkedinAccountName', e.target.value)}
+                  onBlur={() => markTouched('linkedinAccountName')}
                   placeholder="e.g. Horizon Coffee Roasters Ltd"
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 ${inputBorderClass('linkedinAccountName')}`}
                 />
+                {getFieldError('linkedinAccountName') && (
+                  <p className="mt-1 text-xs text-red-700">
+                    {getFieldError('linkedinAccountName')}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -758,17 +1017,30 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="linkedinPageUrl"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  LinkedIn Company Page URL
+                  {form.linkedinStatus === 'has_account'
+                    ? 'LinkedIn Company Page URL *'
+                    : 'LinkedIn Company Page URL'}
                 </label>
                 <input
                   id="linkedinPageUrl"
                   type="text"
+                  required={form.linkedinStatus === 'has_account'}
+                  aria-required={form.linkedinStatus === 'has_account'}
+                  aria-invalid={Boolean(getFieldError('linkedinPageUrl'))}
                   value={form.linkedinPageUrl}
                   onChange={(e) => updateField('linkedinPageUrl', e.target.value)}
-                  placeholder="https://linkedin.com/company/..."
+                  onBlur={() => markTouched('linkedinPageUrl')}
+                  placeholder={
+                    form.linkedinStatus === 'create_new'
+                      ? 'Not required for new page'
+                      : 'https://linkedin.com/company/...'
+                  }
                   disabled={form.linkedinStatus === 'create_new'}
-                  className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-800 disabled:bg-slate-50 disabled:text-slate-400"
+                  className={`w-full px-3 py-2 text-sm text-slate-900 bg-white border rounded-lg focus:outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-400 ${inputBorderClass('linkedinPageUrl')}`}
                 />
+                {getFieldError('linkedinPageUrl') && (
+                  <p className="mt-1 text-xs text-red-700">{getFieldError('linkedinPageUrl')}</p>
+                )}
               </div>
 
               <div>
@@ -776,7 +1048,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
                   htmlFor="linkedinCampaignId"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  LinkedIn Campaign Manager ID
+                  LinkedIn Campaign Manager ID (Optional)
                 </label>
                 <input
                   id="linkedinCampaignId"
@@ -808,14 +1080,29 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
       </div>
 
       <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <p className="text-xs text-slate-500 max-w-md">
-          By submitting, your non-credential business identifiers are stored in the Netpub Agency
-          onboarding database to initiate page creation or delegated Partner Access.
-        </p>
+        <div className="space-y-1 max-w-lg">
+          {!isFormComplete ? (
+            <p className="text-xs font-medium text-amber-800">
+              {validation.missingLabels.length} required{' '}
+              {validation.missingLabels.length === 1 ? 'field' : 'fields'} remaining:{' '}
+              <span className="font-normal text-slate-600">
+                {validation.missingLabels.join(', ')}
+              </span>
+            </p>
+          ) : (
+            <p className="text-xs font-medium text-emerald-700">
+              All required fields are complete and ready to submit.
+            </p>
+          )}
+          <p className="text-xs text-slate-500">
+            By submitting, your non-credential business identifiers are stored in the Netpub Agency
+            onboarding database to initiate page creation or delegated Partner Access.
+          </p>
+        </div>
         <button
           type="submit"
-          disabled={submitting}
-          className="inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-800 hover:bg-blue-900 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          disabled={!isFormComplete || submitting}
+          className="inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-blue-800 hover:bg-blue-900 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           <span>{submitting ? 'Saving Onboarding...' : 'Submit Onboarding Details'}</span>
           <ArrowRight className="w-4 h-4" aria-hidden="true" />
