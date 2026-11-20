@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+import process from 'node:process';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import * as XLSX from 'xlsx';
 

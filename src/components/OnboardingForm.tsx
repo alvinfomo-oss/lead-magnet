@@ -246,9 +246,26 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
         body: JSON.stringify(form),
       });
 
-      const data = await response.json();
+      const rawText = await response.text();
+      let data: { error?: string; submission?: ClientOnboardingRecord } = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = {};
+        }
+      }
+
       if (!response.ok) {
-        setErrorMessage(data.error || 'Could not save onboarding submission.');
+        setErrorMessage(
+          data.error ||
+            `Server error (HTTP ${response.status}) while saving onboarding details.`,
+        );
+        return;
+      }
+
+      if (!data.submission) {
+        setErrorMessage('Unexpected response from server. Please check API configuration.');
         return;
       }
 
@@ -256,7 +273,7 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
       setSubmittedRecord(created);
       onSubmitted(created);
     } catch {
-      setErrorMessage('Network error while saving your onboarding details. Please try again.');
+      setErrorMessage('Network error while contacting the server. Please try again.');
     } finally {
       setSubmitting(false);
     }

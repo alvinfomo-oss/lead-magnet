@@ -57,10 +57,20 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
     setError(null);
     try {
       const response = await fetch('/api/submissions');
-      if (!response.ok) {
-        throw new Error('Failed to load onboarding database.');
+      const rawText = await response.text();
+      let data: { error?: string; submissions?: ClientOnboardingRecord[] } = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = {};
+        }
       }
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          data.error || `Failed to load onboarding database (HTTP ${response.status}).`,
+        );
+      }
       setRecords(data.submissions || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to fetch records.');

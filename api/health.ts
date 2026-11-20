@@ -1,5 +1,5 @@
-import type { ApiRequest, ApiResponse } from './_lib/submissions';
-import { isSupabaseConfigured } from './_lib/submissions';
+import type { ApiRequest, ApiResponse } from './_lib/submissions.js';
+import { isSupabaseConfigured } from './_lib/submissions.js';
 
 export default function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') {

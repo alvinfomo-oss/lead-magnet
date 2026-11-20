@@ -1,10 +1,10 @@
-import type { ApiRequest, ApiResponse } from '../_lib/submissions';
+import type { ApiRequest, ApiResponse } from '../_lib/submissions.js';
 import {
   isSupabaseConfigured,
   mapRow,
   supabaseDeleteSubmission,
   supabaseUpdateSubmission,
-} from '../_lib/submissions';
+} from '../_lib/submissions.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (!isSupabaseConfigured()) {

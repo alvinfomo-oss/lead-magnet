@@ -1,10 +1,10 @@
-import type { ApiRequest, ApiResponse } from '../_lib/submissions';
+import type { ApiRequest, ApiResponse } from '../_lib/submissions.js';
 import {
   createCsvString,
   createXlsxBuffer,
   isSupabaseConfigured,
   supabaseQuerySubmissions,
-} from '../_lib/submissions';
+} from '../_lib/submissions.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') {
