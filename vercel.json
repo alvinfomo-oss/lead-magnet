@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/submissions/export.xlsx",
+      "destination": "/api/submissions/export?format=xlsx"
+    },
+    {
+      "source": "/api/submissions/export.csv",
+      "destination": "/api/submissions/export?format=csv"
+    },
+    {
+      "source": "/((?!api/|assets/|.*\\..*).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
