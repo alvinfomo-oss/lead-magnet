@@ -1,0 +1,6 @@
+{
+  "name": "Netpub Client Onboarding",
+  "description": "Secure client onboarding landing page, partner access checklist, and Excel export database for Netpub Agency.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
