@@ -88,9 +88,16 @@ export function getSupabaseClient(): SupabaseClient {
     );
   }
 
-  if (parsed.pathname && parsed.pathname !== '/') {
+  if (parsed.hostname === 'supabase.com' || parsed.pathname.includes('/dashboard')) {
     throw new Error(
-      'SUPABASE_URL should be the base Project URL (https://<project-ref>.supabase.co) without a dashboard or sub-path.',
+      'SUPABASE_URL must be your API Project URL (https://<project-ref>.supabase.co), not a Supabase dashboard URL.',
+    );
+  }
+
+  const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+  if (normalizedPath && normalizedPath !== '/rest/v1') {
+    throw new Error(
+      'SUPABASE_URL should be the base Project URL (https://<project-ref>.supabase.co).',
     );
   }
 
