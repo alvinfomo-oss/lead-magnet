@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
-import { ArrowRight, Building2, Check, FileSpreadsheet, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Building2, Check, Lock, ShieldCheck } from 'lucide-react';
 import { ActiveView, Header } from './components/Header';
 import { OnboardingForm } from './components/OnboardingForm';
 import { AgencyDatabase } from './components/AgencyDatabase';
+import { LoginView } from './components/LoginView';
+import { TeamManagement } from './components/TeamManagement';
+import { ProfileView } from './components/ProfileView';
+import type { AgencyUser } from './types';
 
 import heroStudioImg from './assets/images/hero_netpub_africa_1794599329965.jpg';
 import workflowReviewImg from './assets/images/workflow_netpub_africa_1794599330733.jpg';
@@ -39,11 +43,30 @@ const PLATFORM_SPEC_ROWS = [
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>('landing');
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<AgencyUser | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [heroImgFailed, setHeroImgFailed] = useState(false);
   const [workflowImgFailed, setWorkflowImgFailed] = useState(false);
 
   function handleNavigateView(view: ActiveView, sectionId?: string) {
+    if ((view === 'database' || view === 'team' || view === 'profile') && !currentUser) {
+      setActiveView('login');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (
+      view === 'team' &&
+      currentUser &&
+      currentUser.role !== 'super_admin' &&
+      currentUser.role !== 'admin'
+    ) {
+      setActiveView('database');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setActiveView(view);
     if (view === 'landing') {
       requestAnimationFrame(() => {
@@ -59,15 +82,64 @@ export default function App() {
     }
   }
 
+  function handleLoginSuccess(token: string, user: AgencyUser) {
+    setAuthToken(token);
+    setCurrentUser(user);
+    setActiveView('database');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function handleLogout() {
+    setAuthToken(null);
+    setCurrentUser(null);
+    setActiveView('landing');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function handleAuthExpired() {
+    setAuthToken(null);
+    setCurrentUser(null);
+    setActiveView('login');
+  }
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      <Header activeView={activeView} onNavigateView={handleNavigateView} />
+      <Header
+        activeView={activeView}
+        currentUser={currentUser}
+        onNavigateView={handleNavigateView}
+        onLogout={handleLogout}
+      />
 
       <main className="flex-1">
-        {activeView === 'database' ? (
+        {activeView === 'login' && !currentUser ? (
+          <LoginView
+            onLoginSuccess={handleLoginSuccess}
+            onCancel={() => handleNavigateView('landing', 'top')}
+          />
+        ) : activeView === 'database' && currentUser && authToken ? (
           <AgencyDatabase
+            token={authToken}
+            currentUser={currentUser}
             refreshSignal={refreshSignal}
             onGoToIntake={() => handleNavigateView('landing', 'intake-form')}
+            onAuthExpired={handleAuthExpired}
+          />
+        ) : activeView === 'team' &&
+          currentUser &&
+          authToken &&
+          (currentUser.role === 'super_admin' || currentUser.role === 'admin') ? (
+          <TeamManagement
+            token={authToken}
+            currentUser={currentUser}
+            onAuthExpired={handleAuthExpired}
+          />
+        ) : activeView === 'profile' && currentUser && authToken ? (
+          <ProfileView
+            token={authToken}
+            currentUser={currentUser}
+            onProfileUpdated={(updated) => setCurrentUser(updated)}
+            onAuthExpired={handleAuthExpired}
           />
         ) : (
           <>
@@ -110,11 +182,15 @@ export default function App() {
                       </a>
                       <button
                         type="button"
-                        onClick={() => handleNavigateView('database')}
-                        className="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        onClick={() =>
+                          handleNavigateView(currentUser ? 'database' : 'login')
+                        }
+                        className="inline-flex items-center gap-2 px-5 py-3 text-sm font-medium text-white bg-[#263547] hover:bg-[#1b2736] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <FileSpreadsheet className="w-4 h-4 text-slate-500" aria-hidden="true" />
-                        <span>Open Agency Export Database</span>
+                        <Lock className="w-4 h-4" aria-hidden="true" />
+                        <span>
+                          {currentUser ? 'Open Agency Database' : 'Access Agency Details'}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -230,8 +306,8 @@ export default function App() {
                         03. Export Straight to Excel
                       </div>
                       <p className="sm:col-span-8 text-sm text-slate-600">
-                        Netpub account managers track onboarding status in the Agency Database and
-                        export structured .xlsx or .csv sheets with a single click.
+                        Authorized Netpub team members track onboarding status in the Agency
+                        Database and export structured .xlsx or .csv sheets with a single click.
                       </p>
                     </div>
                   </div>
@@ -297,8 +373,11 @@ export default function App() {
               </div>
 
               <OnboardingForm
+                isAuthenticated={Boolean(currentUser)}
                 onSubmitted={() => setRefreshSignal((prev) => prev + 1)}
-                onOpenDatabase={() => handleNavigateView('database')}
+                onOpenDatabase={() =>
+                  handleNavigateView(currentUser ? 'database' : 'login')
+                }
               />
             </section>
           </>
@@ -322,10 +401,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => handleNavigateView('database')}
+              onClick={() => handleNavigateView(currentUser ? 'database' : 'login')}
               className="hover:text-slate-900 transition-colors cursor-pointer"
             >
-              Agency Database & Excel Export
+              {currentUser ? 'Agency Database' : 'Access Agency Details'}
             </button>
           </div>
         </div>

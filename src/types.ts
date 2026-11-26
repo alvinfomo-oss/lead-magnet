@@ -28,6 +28,24 @@ export const BUDGET_RANGES = [
   '$10,000+ / mo',
 ] as const;
 
+export type UserRole = 'super_admin' | 'admin' | 'worker';
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  worker: 'Worker',
+};
+
+export interface AgencyUser {
+  id: number;
+  name: string;
+  email: string;
+  role: UserRole;
+  title: string;
+  phone: string;
+  createdAt: string;
+}
+
 export interface ClientOnboardingPayload {
   businessName: string;
   contactName: string;

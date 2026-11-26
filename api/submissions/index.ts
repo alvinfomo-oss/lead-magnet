@@ -6,6 +6,7 @@ import {
   supabaseCreateSubmission,
   supabaseQuerySubmissions,
 } from '../_lib/submissions.js';
+import { authenticateSupabaseRequest } from '../_lib/auth.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (!isSupabaseConfigured()) {
@@ -18,6 +19,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     if (req.method === 'GET') {
+      const actor = await authenticateSupabaseRequest(req, res, [
+        'super_admin',
+        'admin',
+        'worker',
+      ]);
+      if (!actor) return;
+
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
       const q = typeof req.query.q === 'string' ? req.query.q : undefined;
       const rows = await supabaseQuerySubmissions(status, q);

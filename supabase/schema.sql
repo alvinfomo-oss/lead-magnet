@@ -37,6 +37,21 @@ CREATE INDEX IF NOT EXISTS idx_client_onboardings_status
 CREATE INDEX IF NOT EXISTS idx_client_onboardings_created_at
   ON public.client_onboardings (created_at DESC);
 
--- Enable Row Level Security so public anon keys cannot read client PII directly.
+CREATE TABLE IF NOT EXISTS public.agency_users (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin', 'worker')),
+  title TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agency_users_role
+  ON public.agency_users (role);
+
+-- Enable Row Level Security so public anon keys cannot read or mutate agency data directly.
 -- Vercel Serverless Functions use SUPABASE_SERVICE_ROLE_KEY on the server.
 ALTER TABLE public.client_onboardings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agency_users ENABLE ROW LEVEL SECURITY;

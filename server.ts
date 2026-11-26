@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import express from 'express';
+import express, { type Request, type Response } from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -18,6 +18,28 @@ import {
   supabaseUpdateSubmission,
   VALID_WORKFLOW_STATUSES,
 } from './api/_lib/submissions.js';
+import {
+  authenticateSupabaseRequest,
+  buildSeedUserRecords,
+  createSessionToken,
+  extractBearerToken,
+  hashPassword,
+  isValidRole,
+  mapPublicUser,
+  normalizeEmail,
+  supabaseCreateUser,
+  supabaseDeleteUser,
+  supabaseFindUserByEmail,
+  supabaseFindUserById,
+  supabaseListUsers,
+  supabaseUpdateUserPassword,
+  supabaseUpdateUserProfile,
+  supabaseUpdateUserRole,
+  type UserDbRow,
+  type UserRole,
+  verifyPassword,
+  verifySessionToken,
+} from './api/_lib/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,8 +83,38 @@ function getSqliteDb(): Database.Database {
       notes TEXT NOT NULL DEFAULT '',
       onboarding_status TEXT NOT NULL DEFAULT 'Intake Submitted',
       created_at TEXT NOT NULL
-    )
+    );
+
+    CREATE TABLE IF NOT EXISTS agency_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL CHECK (role IN ('super_admin', 'admin', 'worker')),
+      title TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
+
+  const countRow = sqliteDb
+    .prepare('SELECT COUNT(*) AS count FROM agency_users')
+    .get() as { count: number };
+
+  if (countRow.count === 0) {
+    const insertUser = sqliteDb.prepare(`
+      INSERT OR IGNORE INTO agency_users (name, email, role, title, phone, password_hash, created_at)
+      VALUES (@name, @email, @role, @title, @phone, @password_hash, @created_at)
+    `);
+    const now = new Date().toISOString();
+    const tx = sqliteDb.transaction(() => {
+      for (const seed of buildSeedUserRecords()) {
+        insertUser.run({ ...seed, created_at: now });
+      }
+    });
+    tx();
+  }
+
   return sqliteDb;
 }
 
@@ -97,6 +149,64 @@ function sqliteQuerySubmissions(statusFilter?: string, searchQuery?: string): Db
     .all(...params) as DbRow[];
 }
 
+async function requireAuth(
+  req: Request,
+  res: Response,
+  allowedRoles?: UserRole[],
+): Promise<UserDbRow | null> {
+  if (isSupabaseConfigured()) {
+    return authenticateSupabaseRequest(
+      {
+        method: req.method,
+        query: req.query as Record<string, string | string[] | undefined>,
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        body: req.body,
+      },
+      res,
+      allowedRoles,
+    );
+  }
+
+  const token = extractBearerToken({
+    method: req.method,
+    query: req.query as Record<string, string | string[] | undefined>,
+    headers: req.headers as Record<string, string | string[] | undefined>,
+  });
+  if (!token) {
+    res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    return null;
+  }
+
+  const claims = verifySessionToken(token);
+  if (!claims) {
+    res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+    return null;
+  }
+
+  const db = getSqliteDb();
+  const user = db
+    .prepare('SELECT * FROM agency_users WHERE id = ?')
+    .get(claims.sub) as UserDbRow | undefined;
+
+  if (!user) {
+    res.status(401).json({ error: 'User account no longer exists.' });
+    return null;
+  }
+
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    res.status(403).json({ error: 'You do not have permission for this action.' });
+    return null;
+  }
+
+  return user;
+}
+
+const ROLE_DISPLAY: Record<UserRole, string> = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  worker: 'Worker',
+};
+
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
@@ -107,8 +217,403 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Authentication & Profile Routes
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const email = normalizeEmail(body.email);
+    const password = cleanStr(body.password, 128);
+    const expectedRole = body.role;
+
+    if (!email || !password) {
+      res.status(400).json({ error: 'Email and password are required.' });
+      return;
+    }
+
+    if (!isValidRole(expectedRole)) {
+      res.status(400).json({ error: 'Please select a valid role (Super Admin, Admin, or Worker).' });
+      return;
+    }
+
+    let user: UserDbRow | null = null;
+    if (isSupabaseConfigured()) {
+      user = await supabaseFindUserByEmail(email);
+    } else {
+      const db = getSqliteDb();
+      user =
+        (db
+          .prepare('SELECT * FROM agency_users WHERE email = ?')
+          .get(email) as UserDbRow | undefined) ?? null;
+    }
+
+    if (!user || !verifyPassword(password, user.password_hash)) {
+      res.status(401).json({ error: 'Invalid email or password.' });
+      return;
+    }
+
+    if (user.role !== expectedRole) {
+      res.status(403).json({
+        error: `This account is assigned the ${ROLE_DISPLAY[user.role]} role, not ${ROLE_DISPLAY[expectedRole]}.`,
+      });
+      return;
+    }
+
+    const token = createSessionToken({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    });
+
+    res.json({ token, user: mapPublicUser(user) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to sign in.' });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+    res.json({ user: mapPublicUser(user) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to verify session.' });
+  }
+});
+
+app.patch('/api/auth/profile', async (req, res) => {
+  try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const name = cleanStr(body.name, 120);
+    const email = normalizeEmail(body.email);
+    const title = cleanStr(body.title, 120);
+    const phone = cleanStr(body.phone, 60);
+
+    if (!name || !email) {
+      res.status(400).json({ error: 'Full name and email are required.' });
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Please enter a valid email address.' });
+      return;
+    }
+
+    if (isSupabaseConfigured()) {
+      if (email !== user.email.toLowerCase()) {
+        const collision = await supabaseFindUserByEmail(email);
+        if (collision && collision.id !== user.id) {
+          res.status(409).json({ error: 'Another team account already uses that email address.' });
+          return;
+        }
+      }
+      const updated = await supabaseUpdateUserProfile(user.id, { name, email, title, phone });
+      if (!updated) {
+        res.status(404).json({ error: 'User profile not found.' });
+        return;
+      }
+      res.json({ user: mapPublicUser(updated) });
+      return;
+    }
+
+    const db = getSqliteDb();
+    if (email !== user.email.toLowerCase()) {
+      const collision = db
+        .prepare('SELECT id FROM agency_users WHERE email = ? AND id != ?')
+        .get(email, user.id) as { id: number } | undefined;
+      if (collision) {
+        res.status(409).json({ error: 'Another team account already uses that email address.' });
+        return;
+      }
+    }
+
+    db.prepare(
+      'UPDATE agency_users SET name = ?, email = ?, title = ?, phone = ? WHERE id = ?',
+    ).run(name, email, title, phone, user.id);
+
+    const updated = db
+      .prepare('SELECT * FROM agency_users WHERE id = ?')
+      .get(user.id) as UserDbRow;
+    res.json({ user: mapPublicUser(updated) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to update profile.' });
+  }
+});
+
+app.patch('/api/auth/password', async (req, res) => {
+  try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const currentPassword = cleanStr(body.currentPassword, 128);
+    const newPassword = cleanStr(body.newPassword, 128);
+
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: 'Current password and new password are required.' });
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      res.status(400).json({ error: 'New password must be at least 4 characters long.' });
+      return;
+    }
+
+    if (!verifyPassword(currentPassword, user.password_hash)) {
+      res.status(401).json({ error: 'Current password is incorrect.' });
+      return;
+    }
+
+    const nextHash = hashPassword(newPassword);
+    if (isSupabaseConfigured()) {
+      await supabaseUpdateUserPassword(user.id, nextHash);
+    } else {
+      const db = getSqliteDb();
+      db.prepare('UPDATE agency_users SET password_hash = ? WHERE id = ?').run(nextHash, user.id);
+    }
+
+    res.json({ updated: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to update password.' });
+  }
+});
+
+// User & Admin Management Routes (Super Admin & Admin only)
+app.get('/api/users', async (req, res) => {
+  try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin']);
+    if (!actor) return;
+
+    if (isSupabaseConfigured()) {
+      const users = await supabaseListUsers();
+      res.json({ users: users.map(mapPublicUser) });
+      return;
+    }
+
+    const db = getSqliteDb();
+    const users = db
+      .prepare('SELECT * FROM agency_users ORDER BY id ASC')
+      .all() as UserDbRow[];
+    res.json({ users: users.map(mapPublicUser) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to load users.' });
+  }
+});
+
+app.post('/api/users', async (req, res) => {
+  try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin']);
+    if (!actor) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const name = cleanStr(body.name, 120);
+    const email = normalizeEmail(body.email);
+    const password = cleanStr(body.password, 128);
+    const title = cleanStr(body.title, 120);
+    const phone = cleanStr(body.phone, 60);
+    const requestedRole: UserRole = isValidRole(body.role) ? body.role : 'worker';
+
+    if (!name || !email || !password) {
+      res.status(400).json({ error: 'Name, email, and initial password are required.' });
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Please enter a valid email address.' });
+      return;
+    }
+
+    if (password.length < 4) {
+      res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+      return;
+    }
+
+    if (requestedRole === 'super_admin') {
+      res.status(403).json({ error: 'Additional Super Admin accounts cannot be created here.' });
+      return;
+    }
+
+    if (actor.role === 'admin' && requestedRole !== 'worker') {
+      res.status(403).json({
+        error: 'Admins can only create Worker accounts. Only Super Admin can manage Admins.',
+      });
+      return;
+    }
+
+    const passwordHash = hashPassword(password);
+    if (isSupabaseConfigured()) {
+      const existing = await supabaseFindUserByEmail(email);
+      if (existing) {
+        res.status(409).json({ error: 'An account with that email already exists.' });
+        return;
+      }
+      const created = await supabaseCreateUser({
+        name,
+        email,
+        role: requestedRole,
+        title,
+        phone,
+        passwordHash,
+      });
+      res.status(201).json({ user: mapPublicUser(created) });
+      return;
+    }
+
+    const db = getSqliteDb();
+    const existing = db
+      .prepare('SELECT id FROM agency_users WHERE email = ?')
+      .get(email) as { id: number } | undefined;
+    if (existing) {
+      res.status(409).json({ error: 'An account with that email already exists.' });
+      return;
+    }
+
+    const info = db
+      .prepare(
+        `INSERT INTO agency_users (name, email, role, title, phone, password_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(name, email, requestedRole, title, phone, passwordHash, new Date().toISOString());
+
+    const created = db
+      .prepare('SELECT * FROM agency_users WHERE id = ?')
+      .get(info.lastInsertRowid) as UserDbRow;
+
+    res.status(201).json({ user: mapPublicUser(created) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to create user.' });
+  }
+});
+
+app.patch('/api/users/:id', async (req, res) => {
+  try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin']);
+    if (!actor) return;
+
+    if (actor.role !== 'super_admin') {
+      res.status(403).json({
+        error: 'Only the Super Admin can promote Workers to Admin or demote Admins to Worker.',
+      });
+      return;
+    }
+
+    const targetId = Number(req.params.id);
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+      res.status(400).json({ error: 'Invalid user ID.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const nextRole = body.role;
+    if (nextRole !== 'admin' && nextRole !== 'worker') {
+      res.status(400).json({ error: 'Role must be either admin or worker.' });
+      return;
+    }
+
+    if (isSupabaseConfigured()) {
+      const target = await supabaseFindUserById(targetId);
+      if (!target) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      if (target.id === actor.id || target.role === 'super_admin') {
+        res.status(400).json({ error: 'Super Admin role cannot be changed.' });
+        return;
+      }
+      const updated = await supabaseUpdateUserRole(targetId, nextRole);
+      res.json({ user: mapPublicUser(updated!) });
+      return;
+    }
+
+    const db = getSqliteDb();
+    const target = db
+      .prepare('SELECT * FROM agency_users WHERE id = ?')
+      .get(targetId) as UserDbRow | undefined;
+    if (!target) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+    if (target.id === actor.id || target.role === 'super_admin') {
+      res.status(400).json({ error: 'Super Admin role cannot be changed.' });
+      return;
+    }
+
+    db.prepare('UPDATE agency_users SET role = ? WHERE id = ?').run(nextRole, targetId);
+    const updated = db
+      .prepare('SELECT * FROM agency_users WHERE id = ?')
+      .get(targetId) as UserDbRow;
+    res.json({ user: mapPublicUser(updated) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to update role.' });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin']);
+    if (!actor) return;
+
+    const targetId = Number(req.params.id);
+    if (!Number.isInteger(targetId) || targetId <= 0) {
+      res.status(400).json({ error: 'Invalid user ID.' });
+      return;
+    }
+
+    if (isSupabaseConfigured()) {
+      const target = await supabaseFindUserById(targetId);
+      if (!target) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      if (target.id === actor.id || target.role === 'super_admin') {
+        res.status(403).json({ error: 'Super Admin accounts cannot be deleted.' });
+        return;
+      }
+      if (actor.role === 'admin' && target.role !== 'worker') {
+        res.status(403).json({
+          error: 'Admins can only delete Worker accounts. Only Super Admin can manage Admins.',
+        });
+        return;
+      }
+      await supabaseDeleteUser(targetId);
+      res.json({ deleted: true });
+      return;
+    }
+
+    const db = getSqliteDb();
+    const target = db
+      .prepare('SELECT * FROM agency_users WHERE id = ?')
+      .get(targetId) as UserDbRow | undefined;
+    if (!target) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+    if (target.id === actor.id || target.role === 'super_admin') {
+      res.status(403).json({ error: 'Super Admin accounts cannot be deleted.' });
+      return;
+    }
+    if (actor.role === 'admin' && target.role !== 'worker') {
+      res.status(403).json({
+        error: 'Admins can only delete Worker accounts. Only Super Admin can manage Admins.',
+      });
+      return;
+    }
+
+    db.prepare('DELETE FROM agency_users WHERE id = ?').run(targetId);
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unable to delete user.' });
+  }
+});
+
+// Client Onboarding Submissions Routes (POST is public for client intake; GET/PATCH/DELETE/Export require auth)
 app.get('/api/submissions', async (req, res) => {
   try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin', 'worker']);
+    if (!actor) return;
+
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const q = typeof req.query.q === 'string' ? req.query.q : undefined;
     const rows = isSupabaseConfigured()
@@ -180,6 +685,9 @@ app.post('/api/submissions', async (req, res) => {
 
 app.patch('/api/submissions/:id', async (req, res) => {
   try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin', 'worker']);
+    if (!actor) return;
+
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: 'Invalid submission ID.' });
@@ -236,6 +744,9 @@ app.patch('/api/submissions/:id', async (req, res) => {
 
 app.delete('/api/submissions/:id', async (req, res) => {
   try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin']);
+    if (!actor) return;
+
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: 'Invalid submission ID.' });
@@ -266,6 +777,9 @@ app.delete('/api/submissions/:id', async (req, res) => {
 
 app.get('/api/submissions/export.xlsx', async (req, res) => {
   try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin', 'worker']);
+    if (!actor) return;
+
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const q = typeof req.query.q === 'string' ? req.query.q : undefined;
     const rows = isSupabaseConfigured()
@@ -289,6 +803,9 @@ app.get('/api/submissions/export.xlsx', async (req, res) => {
 
 app.get('/api/submissions/export.csv', async (req, res) => {
   try {
+    const actor = await requireAuth(req, res, ['super_admin', 'admin', 'worker']);
+    if (!actor) return;
+
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const q = typeof req.query.q === 'string' ? req.query.q : undefined;
     const rows = isSupabaseConfigured()

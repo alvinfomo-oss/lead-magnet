@@ -15,6 +15,7 @@ import {
 } from '../types';
 
 interface OnboardingFormProps {
+  isAuthenticated?: boolean;
   onSubmitted: (record: ClientOnboardingRecord) => void;
   onOpenDatabase: () => void;
 }
@@ -192,7 +193,11 @@ function validateForm(form: ClientOnboardingPayload): {
   return { fieldErrors, missingLabels };
 }
 
-export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormProps) {
+export function OnboardingForm({
+  isAuthenticated = false,
+  onSubmitted,
+  onOpenDatabase,
+}: OnboardingFormProps) {
   const [form, setForm] = useState<ClientOnboardingPayload>(INITIAL_FORM);
   const [touched, setTouched] = useState<Partial<Record<ValidatedFieldKey, boolean>>>({});
   const [attemptedSubmit, setAttemptedSubmit] = useState(false);
@@ -441,7 +446,9 @@ export function OnboardingForm({ onSubmitted, onOpenDatabase }: OnboardingFormPr
             onClick={onOpenDatabase}
             className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-800 hover:bg-blue-900 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <span>Open Agency Database & Export Excel</span>
+            <span>
+              {isAuthenticated ? 'Open Agency Database & Export Excel' : 'Access Agency Details'}
+            </span>
             <ArrowRight className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>

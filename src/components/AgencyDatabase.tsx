@@ -8,16 +8,23 @@ import {
   X,
   Plus,
   AlertCircle,
+  BarChart3,
 } from 'lucide-react';
 import {
+  AgencyUser,
   ClientOnboardingRecord,
   OnboardingWorkflowStatus,
   PlatformChannelStatus,
+  ROLE_LABELS,
+  SERVICE_PACKAGES,
   WORKFLOW_STATUSES,
 } from '../types';
 
 interface AgencyDatabaseProps {
+  token: string;
+  currentUser: AgencyUser;
   onGoToIntake: () => void;
+  onAuthExpired: () => void;
   refreshSignal: number;
 }
 
@@ -43,10 +50,20 @@ function statusTextTone(status: OnboardingWorkflowStatus): string {
   }
 }
 
-export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabaseProps) {
+export function AgencyDatabase({
+  token,
+  currentUser,
+  onGoToIntake,
+  onAuthExpired,
+  refreshSignal,
+}: AgencyDatabaseProps) {
+  const canDelete =
+    currentUser.role === 'super_admin' || currentUser.role === 'admin';
+
   const [records, setRecords] = useState<ClientOnboardingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportingFormat, setExportingFormat] = useState<'xlsx' | 'csv' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | OnboardingWorkflowStatus>('All');
   const [selectedRecord, setSelectedRecord] = useState<ClientOnboardingRecord | null>(null);
@@ -56,7 +73,15 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/submissions');
+      const response = await fetch('/api/submissions', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (response.status === 401) {
+        onAuthExpired();
+        return;
+      }
       const rawText = await response.text();
       let data: { error?: string; submissions?: ClientOnboardingRecord[] } = {};
       if (rawText) {
@@ -81,7 +106,7 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
 
   useEffect(() => {
     fetchRecords();
-  }, [refreshSignal]);
+  }, [refreshSignal, token]);
 
   const filteredRecords = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -108,6 +133,18 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
     let pendingAccess = 0;
     let readyForAds = 0;
 
+    const channelStats = {
+      Facebook: { existing: 0, createNew: 0 },
+      Instagram: { existing: 0, createNew: 0 },
+      TikTok: { existing: 0, createNew: 0 },
+      LinkedIn: { existing: 0, createNew: 0 },
+    };
+
+    const packageCounts: Record<string, number> = {};
+    for (const pkg of SERVICE_PACKAGES) {
+      packageCounts[pkg] = 0;
+    }
+
     for (const r of records) {
       if (
         r.facebookStatus === 'create_new' ||
@@ -126,6 +163,20 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
       if (r.onboardingStatus === 'Ready for Ads' || r.onboardingStatus === 'Completed') {
         readyForAds += 1;
       }
+
+      if (r.facebookStatus === 'has_account') channelStats.Facebook.existing += 1;
+      if (r.facebookStatus === 'create_new') channelStats.Facebook.createNew += 1;
+
+      if (r.instagramStatus === 'has_account') channelStats.Instagram.existing += 1;
+      if (r.instagramStatus === 'create_new') channelStats.Instagram.createNew += 1;
+
+      if (r.tiktokStatus === 'has_account') channelStats.TikTok.existing += 1;
+      if (r.tiktokStatus === 'create_new') channelStats.TikTok.createNew += 1;
+
+      if (r.linkedinStatus === 'has_account') channelStats.LinkedIn.existing += 1;
+      if (r.linkedinStatus === 'create_new') channelStats.LinkedIn.createNew += 1;
+
+      packageCounts[r.servicePackage] = (packageCounts[r.servicePackage] ?? 0) + 1;
     }
 
     return {
@@ -133,6 +184,8 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
       pageCreationNeeded,
       pendingAccess,
       readyForAds,
+      channelStats,
+      packageCounts,
     };
   }, [records]);
 
@@ -141,9 +194,16 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
     try {
       const response = await fetch(`/api/submissions/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ onboardingStatus: nextStatus }),
       });
+      if (response.status === 401) {
+        onAuthExpired();
+        return;
+      }
       if (!response.ok) return;
       const data = await response.json();
       setRecords((prev) => prev.map((item) => (item.id === id ? data.submission : item)));
@@ -156,9 +216,19 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
   }
 
   async function handleDelete(id: number) {
+    if (!canDelete) return;
     setUpdatingId(id);
     try {
-      const response = await fetch(`/api/submissions/${id}`, { method: 'DELETE' });
+      const response = await fetch(`/api/submissions/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (response.status === 401) {
+        onAuthExpired();
+        return;
+      }
       if (!response.ok) return;
       setRecords((prev) => prev.filter((item) => item.id !== id));
       if (selectedRecord?.id === id) {
@@ -169,12 +239,43 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
     }
   }
 
-  function buildExportUrl(format: 'xlsx' | 'csv') {
-    const params = new URLSearchParams();
-    if (statusFilter !== 'All') params.set('status', statusFilter);
-    if (searchQuery.trim()) params.set('q', searchQuery.trim());
-    const qs = params.toString();
-    return `/api/submissions/export.${format}${qs ? `?${qs}` : ''}`;
+  async function handleExport(format: 'xlsx' | 'csv') {
+    setExportingFormat(format);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (statusFilter !== 'All') params.set('status', statusFilter);
+      if (searchQuery.trim()) params.set('q', searchQuery.trim());
+      const qs = params.toString();
+      const url = `/api/submissions/export.${format}${qs ? `?${qs}` : ''}`;
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (response.status === 401) {
+        onAuthExpired();
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to export ${format.toUpperCase()} file.`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `netpub-client-onboarding.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to export spreadsheet.');
+    } finally {
+      setExportingFormat(null);
+    }
   }
 
   return (
@@ -183,7 +284,8 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-200">
         <div>
           <p className="text-xs font-medium text-slate-500">
-            Netpub Agency Operations · Client Intake Database
+            Netpub Agency Operations · Signed in as {currentUser.name} (
+            {ROLE_LABELS[currentUser.role]})
           </p>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mt-1">
             Client Onboarding & Excel Export
@@ -191,22 +293,24 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <a
-            href={buildExportUrl('csv')}
-            download="netpub-client-onboarding.csv"
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+          <button
+            type="button"
+            disabled={exportingFormat !== null}
+            onClick={() => handleExport('csv')}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download className="w-4 h-4" aria-hidden="true" />
-            <span>Download CSV</span>
-          </a>
-          <a
-            href={buildExportUrl('xlsx')}
-            download="netpub-client-onboarding.xlsx"
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-800 hover:bg-blue-900 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            <span>{exportingFormat === 'csv' ? 'Downloading...' : 'Download CSV'}</span>
+          </button>
+          <button
+            type="button"
+            disabled={exportingFormat !== null}
+            onClick={() => handleExport('xlsx')}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-800 hover:bg-blue-900 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4" aria-hidden="true" />
-            <span>Export Excel (.xlsx)</span>
-          </a>
+            <span>{exportingFormat === 'xlsx' ? 'Exporting...' : 'Export Excel (.xlsx)'}</span>
+          </button>
         </div>
       </div>
 
@@ -237,6 +341,48 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
           </div>
         </div>
       </div>
+
+      {/* Channel & Service Analytics Summary */}
+      {records.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <BarChart3 className="w-4 h-4 text-slate-600" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-900">
+              Channel Workload & Service Demand Analysis
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {Object.entries(metrics.channelStats).map(([platform, counts]) => (
+                <div key={platform} className="space-y-1.5 border-r last:border-r-0 border-slate-100 pr-3">
+                  <div className="text-xs font-semibold text-slate-900">{platform}</div>
+                  <div className="text-xs text-slate-600 tabular-nums">
+                    Partner Access: <span className="font-semibold text-slate-900">{counts.existing}</span>
+                  </div>
+                  <div className="text-xs text-slate-600 tabular-nums">
+                    New Page Setup: <span className="font-semibold text-blue-800">{counts.createNew}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="lg:col-span-5 space-y-2 border-t lg:border-t-0 lg:border-l border-slate-100 pt-4 lg:pt-0 lg:pl-6">
+              <div className="text-xs font-semibold text-slate-700">Requested Packages</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                {Object.entries(metrics.packageCounts).map(([pkg, count]) => (
+                  <div key={pkg} className="flex items-center justify-between gap-2 text-slate-600">
+                    <span className="truncate">{pkg}</span>
+                    <span className="font-mono font-medium text-slate-900 tabular-nums">
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters & Search */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -406,15 +552,17 @@ export function AgencyDatabase({ onGoToIntake, refreshSignal }: AgencyDatabasePr
                         >
                           <Eye className="w-4 h-4" aria-hidden="true" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(rec.id)}
-                          disabled={updatingId === rec.id}
-                          title="Delete submission"
-                          className="p-2 text-slate-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" aria-hidden="true" />
-                        </button>
+                        {canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(rec.id)}
+                            disabled={updatingId === rec.id}
+                            title="Delete submission"
+                            className="p-2 text-slate-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

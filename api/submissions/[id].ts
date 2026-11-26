@@ -5,6 +5,7 @@ import {
   supabaseDeleteSubmission,
   supabaseUpdateSubmission,
 } from '../_lib/submissions.js';
+import { authenticateSupabaseRequest } from '../_lib/auth.js';
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
   if (!isSupabaseConfigured()) {
@@ -24,6 +25,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
   try {
     if (req.method === 'PATCH') {
+      const actor = await authenticateSupabaseRequest(req, res, [
+        'super_admin',
+        'admin',
+        'worker',
+      ]);
+      if (!actor) return;
+
       const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
         string,
         unknown
@@ -43,6 +51,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     }
 
     if (req.method === 'DELETE') {
+      const actor = await authenticateSupabaseRequest(req, res, ['super_admin', 'admin']);
+      if (!actor) return;
+
       const deleted = await supabaseDeleteSubmission(id);
       if (!deleted) {
         res.status(404).json({ error: 'Submission not found.' });
